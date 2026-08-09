@@ -1,0 +1,515 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>バイオリンチャートツール</title>
+<style>
+  :root{
+    --bg:#0f1210;
+    --panel:#171b18;
+    --panel-2:#1d221e;
+    --grid:#2a322c;
+    --grid-strong:#3a453d;
+    --ink:#dce4da;
+    --ink-dim:#8a9690;
+    --accent:#7fe0a0;
+    --accent-2:#e8a33d;
+    --danger:#e8666a;
+    --mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:var(--bg);
+    color:var(--ink);
+    font-family:var(--mono);
+    font-size:14px;
+    line-height:1.5;
+    min-height:100vh;
+  }
+  header{padding:22px 28px 14px; border-bottom:1px solid var(--grid);}
+  header .kicker{color:var(--accent); font-size:11px; letter-spacing:0.18em; text-transform:uppercase; margin:0 0 6px;}
+  header h1{margin:0; font-size:22px; font-weight:600; letter-spacing:0.01em;}
+  header p{margin:8px 0 0; color:var(--ink-dim); font-size:12.5px; max-width:70ch;}
+  header nav{margin-top:10px; display:flex; gap:14px;}
+  header nav a{color:var(--ink-dim); font-size:11.5px; text-decoration:none; border-bottom:1px solid transparent;}
+  header nav a:hover{color:var(--accent); border-color:var(--accent);}
+  main.layout{
+    display:grid;
+    grid-template-columns: 360px 1fr;
+    gap:1px;
+    background:var(--grid);
+    min-height:calc(100vh - 118px);
+  }
+  @media (max-width: 860px){ main.layout{grid-template-columns: 1fr;} }
+  .panel{background:var(--panel); padding:20px 22px;}
+  .panel h2{
+    font-size:11px; letter-spacing:0.14em; text-transform:uppercase;
+    color:var(--ink-dim); margin:0 0 12px; display:flex; align-items:center; gap:8px;
+  }
+  .panel h2::before{content:""; width:6px; height:6px; background:var(--accent); display:inline-block;}
+  textarea{
+    width:100%; min-height:150px; resize:vertical;
+    background:var(--panel-2); border:1px solid var(--grid-strong); color:var(--ink);
+    font-family:var(--mono); font-size:12.5px; padding:10px 12px; outline:none;
+  }
+  textarea:focus{border-color:var(--accent);}
+  .hint{color:var(--ink-dim); font-size:11px; margin:6px 0 18px;}
+  .field{margin-bottom:14px;}
+  .field label{display:block; font-size:11px; color:var(--ink-dim); letter-spacing:0.06em; margin-bottom:5px;}
+  .field .val{color:var(--accent); font-variant-numeric:tabular-nums;}
+  input[type="range"]{width:100%; accent-color:var(--accent);}
+  .warning{
+    margin-top:4px; margin-bottom:14px; padding:9px 11px; border:1px solid var(--danger);
+    color:var(--danger); font-size:11.5px; display:none;
+  }
+  .warning.show{display:block;}
+  .varlist{
+    display:flex; flex-direction:column; gap:6px;
+    max-height:200px; overflow-y:auto;
+    background:var(--panel-2); border:1px solid var(--grid); padding:10px;
+  }
+  .varlist label{display:flex; align-items:center; gap:8px; font-size:12.5px; cursor:pointer; user-select:none;}
+  .varlist input{accent-color:var(--accent);}
+  .swatch{width:9px; height:9px; background:var(--accent); display:inline-block; flex:none;}
+  .toggle-row{display:flex; gap:16px; flex-wrap:wrap; margin-bottom:4px;}
+  .toggle{display:flex; align-items:center; gap:7px; font-size:12.5px; cursor:pointer; user-select:none;}
+  .toggle input{accent-color:var(--accent);}
+  .readout{margin-top:20px; border-top:1px solid var(--grid); padding-top:16px;}
+  .readout-grid{display:grid; grid-template-columns: 1fr 1fr; gap:10px 14px;}
+  .stat{background:var(--panel-2); border:1px solid var(--grid); padding:8px 10px;}
+  .stat .k{font-size:10px; color:var(--ink-dim); letter-spacing:0.1em; text-transform:uppercase;}
+  .stat .v{font-size:15px; color:var(--accent); margin-top:2px; font-variant-numeric:tabular-nums;}
+  .chart-panel{display:flex; flex-direction:column; min-height:100%;}
+  .chart-panel .chart-head{display:flex; justify-content:space-between; align-items:baseline; margin-bottom:10px;}
+  .chart-wrap{
+    flex:1; background:var(--panel-2); border:1px solid var(--grid);
+    min-height:420px; overflow:auto; position:relative;
+  }
+  svg{display:block; width:100%; height:100%;}
+  .violin{fill:var(--accent); fill-opacity:0.55; stroke:var(--accent); stroke-width:1.2;}
+  .iqr-line{stroke:var(--accent-2); stroke-width:3; stroke-linecap:round;}
+  .median-dot{fill:var(--bg); stroke:var(--accent-2); stroke-width:2;}
+  .raw-point{fill:var(--ink); }
+  .axis-line{stroke:var(--grid-strong); stroke-width:1;}
+  .grid-line{stroke:var(--grid); stroke-width:1;}
+  .tick-text{fill:var(--ink-dim); font-family:var(--mono); font-size:10.5px;}
+  .group-label{fill:var(--ink-dim); font-family:var(--mono); font-size:11px; text-anchor:middle;}
+  .empty-state{
+    display:flex; align-items:center; justify-content:center; height:100%;
+    color:var(--ink-dim); font-size:12.5px; text-align:center; padding:20px;
+  }
+  .note{
+    display:flex; align-items:center; justify-content:center; height:100%;
+    color:var(--ink-dim); font-size:11px;
+  }
+  footer{padding:14px 28px; color:var(--ink-dim); font-size:11px; border-top:1px solid var(--grid);}
+</style>
+</head>
+<body>
+
+<header>
+  <p class="kicker">Instrument / Distribution Shape</p>
+  <h1>バイオリンチャートツール</h1>
+  <p>グループごとの数値データから、カーネル密度推定による分布形状（バイオリンプロット）を描画します。グループ間の分布の比較に使えます。</p>
+  <nav><a href="index.html">← ツール一覧</a> <a href="histogram.html">ヒストグラム</a> <a href="scatter-matrix.html">散布図行列</a></nav>
+</header>
+
+<main class="layout">
+
+  <section class="panel input-panel">
+    <h2>データ入力</h2>
+    <textarea id="dataInput" placeholder="グループ名, 値&#10;A, 12.3&#10;A, 14.1&#10;B, 9.8">A, 12.3
+A, 14.1
+A, 13.0
+A, 15.4
+A, 11.8
+A, 13.6
+A, 14.9
+A, 12.7
+A, 13.3
+A, 16.2
+B, 9.8
+B, 8.5
+B, 10.2
+B, 11.0
+B, 9.1
+B, 10.6
+B, 8.9
+B, 9.7
+B, 10.9
+B, 9.4
+C, 18.2
+C, 17.1
+C, 19.5
+C, 16.8
+C, 18.9
+C, 17.6
+C, 19.9
+C, 18.4
+C, 17.9
+C, 20.3</textarea>
+    <p class="hint">各行「グループ名, 値」（カンマまたはタブ区切り）。グループ名を省略し数値のみでも入力可（単一グループとして扱う）。エクセルの2列コピペにも対応。</p>
+
+    <h2>使用するグループ</h2>
+    <div class="varlist" id="varList"></div>
+
+    <div class="warning" id="warningBox"></div>
+
+    <div class="readout">
+      <h2>表示設定</h2>
+      <div class="field">
+        <label for="bandwidth">バンド幅係数（KDEの滑らかさ）: <span class="val" id="bandwidthVal">1.0</span></label>
+        <input type="range" id="bandwidth" min="0.3" max="3" step="0.1" value="1.0">
+      </div>
+      <div class="field">
+        <label for="maxWidth">バイオリンの最大幅: <span class="val" id="maxWidthVal">50</span></label>
+        <input type="range" id="maxWidth" min="20" max="90" step="5" value="50">
+      </div>
+      <div class="toggle-row">
+        <label class="toggle"><input type="checkbox" id="showIqr" checked> 中央値・四分位範囲を表示</label>
+        <label class="toggle"><input type="checkbox" id="showPoints"> 生データ点を重ねて表示</label>
+      </div>
+    </div>
+
+    <div class="readout" id="statsSection" style="display:none;">
+      <h2>グループ統計</h2>
+      <div class="readout-grid" id="statsGrid"></div>
+    </div>
+  </section>
+
+  <section class="panel chart-panel">
+    <div class="chart-head"><h2 style="margin:0;">バイオリンチャート</h2></div>
+    <div class="chart-wrap" id="chartWrap">
+      <div class="empty-state" id="emptyState">データを入力してください（自動で描画されます）</div>
+      <svg id="chart" style="display:none;"></svg>
+    </div>
+  </section>
+
+</main>
+
+<footer>すべての処理はブラウザ内で完結します。入力データは外部に送信されません。</footer>
+
+<script>
+(function(){
+  "use strict";
+
+  const dataInput    = document.getElementById('dataInput');
+  const varList      = document.getElementById('varList');
+  const warningBox   = document.getElementById('warningBox');
+  const bandwidthEl  = document.getElementById('bandwidth');
+  const bandwidthVal = document.getElementById('bandwidthVal');
+  const maxWidthEl   = document.getElementById('maxWidth');
+  const maxWidthVal  = document.getElementById('maxWidthVal');
+  const showIqrEl    = document.getElementById('showIqr');
+  const showPointsEl = document.getElementById('showPoints');
+  const emptyState   = document.getElementById('emptyState');
+  const svg          = document.getElementById('chart');
+  const chartWrap    = document.getElementById('chartWrap');
+  const statsSection = document.getElementById('statsSection');
+  const statsGrid    = document.getElementById('statsGrid');
+
+  let selectedGroups = null;
+
+  function showWarning(msg){
+    if(!msg){ warningBox.classList.remove('show'); warningBox.textContent=''; return; }
+    warningBox.textContent = msg;
+    warningBox.classList.add('show');
+  }
+
+  function fmt(num){
+    if(!Number.isFinite(num)) return '—';
+    const abs = Math.abs(num);
+    if(abs !== 0 && (abs < 0.001 || abs >= 100000)) return num.toExponential(2);
+    return (Math.round(num * 1000) / 1000).toString();
+  }
+
+  function mean(arr){ return arr.reduce((a,b)=>a+b,0) / arr.length; }
+  function stddev(arr, m){
+    const v = arr.reduce((a,b)=>a + (b-m)*(b-m), 0) / (arr.length - 1 || 1);
+    return Math.sqrt(v);
+  }
+  function quantile(sorted, q){
+    const pos = (sorted.length - 1) * q;
+    const base = Math.floor(pos);
+    const rest = pos - base;
+    if(sorted[base+1] !== undefined) return sorted[base] + rest * (sorted[base+1] - sorted[base]);
+    return sorted[base];
+  }
+
+  function parseGroups(text){
+    const lines = text.split(/\r?\n/).filter(l => l.trim().length > 0);
+    if(lines.length === 0) return { order: [], groupMap: {}, skipped: 0 };
+
+    const tryParseLine = (line) => {
+      const parts = line.split(/[,\t]/);
+      let label, valueStr;
+      if(parts.length >= 2){
+        label = parts[0].trim();
+        valueStr = parts.slice(1).join(',').trim();
+      } else {
+        label = null;
+        valueStr = parts[0].trim();
+      }
+      const value = parseFloat(valueStr);
+      return { label, value, valid: Number.isFinite(value) };
+    };
+
+    const first = tryParseLine(lines[0]);
+    const dataLines = first.valid ? lines : lines.slice(1);
+
+    const order = [];
+    const groupMap = {};
+    let skipped = 0;
+
+    dataLines.forEach(line => {
+      const r = tryParseLine(line);
+      if(!r.valid){ skipped++; return; }
+      const label = (r.label && r.label.length > 0) ? r.label : 'data';
+      if(!(label in groupMap)){ groupMap[label] = []; order.push(label); }
+      groupMap[label].push(r.value);
+    });
+
+    return { order, groupMap, skipped };
+  }
+
+  function renderVarList(order){
+    const key = order.join('|');
+    if(!selectedGroups || selectedGroups.__key !== key){
+      selectedGroups = { __key: key };
+      order.forEach(n => { selectedGroups[n] = true; });
+    }
+    varList.innerHTML = order.map(n =>
+      `<label><input type="checkbox" data-var="${n}" ${selectedGroups[n] ? 'checked' : ''}><span class="swatch"></span>${n}</label>`
+    ).join('');
+    varList.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+      cb.addEventListener('change', () => {
+        selectedGroups[cb.dataset.var] = cb.checked;
+        run();
+      });
+    });
+  }
+
+  function gaussianKernel(u){
+    return Math.exp(-0.5 * u * u) / Math.sqrt(2 * Math.PI);
+  }
+
+  function silvermanBandwidth(values, sorted, sd, factor){
+    const n = values.length;
+    const q1 = quantile(sorted, 0.25), q3 = quantile(sorted, 0.75);
+    const iqr = q3 - q1;
+    let robust = Math.min(sd, iqr / 1.34);
+    if(!Number.isFinite(robust) || robust <= 0) robust = sd || 1;
+    let h = 0.9 * robust * Math.pow(n, -0.2);
+    if(!Number.isFinite(h) || h <= 0) h = (sorted[sorted.length-1] - sorted[0]) * 0.05 || 1;
+    return h * factor;
+  }
+
+  function computeKDE(values, domain, bandwidthFactor, gridN){
+    const sorted = [...values].sort((a,b)=>a-b);
+    const m = mean(values);
+    const sd = stddev(values, m);
+    const h = silvermanBandwidth(values, sorted, sd, bandwidthFactor);
+    const [lo, hi] = domain;
+    const grid = [];
+    const density = [];
+    for(let i=0;i<=gridN;i++){
+      const x = lo + (hi - lo) * (i / gridN);
+      let sum = 0;
+      for(const v of values){ sum += gaussianKernel((x - v) / h); }
+      grid.push(x);
+      density.push(sum / (values.length * h));
+    }
+    return { grid, density, median: quantile(sorted,0.5), q1: quantile(sorted,0.25), q3: quantile(sorted,0.75), mean: m, sd, n: values.length };
+  }
+
+  function el(tag, attrs){
+    const e = document.createElementNS("http://www.w3.org/2000/svg", tag);
+    for(const k in attrs) e.setAttribute(k, attrs[k]);
+    return e;
+  }
+
+  function niceLinearTicks(minVal, maxVal, count){
+    const range = maxVal - minVal || 1;
+    const rough = range / count;
+    const mag = Math.pow(10, Math.floor(Math.log10(rough)));
+    const norm = rough / mag;
+    let step;
+    if(norm < 1.5) step = 1*mag;
+    else if(norm < 3) step = 2*mag;
+    else if(norm < 7) step = 5*mag;
+    else step = 10*mag;
+    const start = Math.ceil(minVal / step) * step;
+    const ticks = [];
+    for(let t=start; t<=maxVal + step*0.001; t+=step){ ticks.push(t); }
+    return ticks;
+  }
+
+  function renderStats(order, groupMap){
+    statsSection.style.display = 'block';
+    const rows = order.map(name => {
+      const vals = groupMap[name];
+      const sorted = [...vals].sort((a,b)=>a-b);
+      return `<div class="stat"><div class="k">${name} (n=${vals.length})</div><div class="v">中央値 ${fmt(quantile(sorted,0.5))}</div></div>`;
+    });
+    statsGrid.innerHTML = rows.join('');
+  }
+
+  function renderChart(order, groupMap, opts){
+    emptyState.style.display = 'none';
+    svg.style.display = 'block';
+    svg.innerHTML = '';
+
+    const wrapRect = chartWrap.getBoundingClientRect();
+    const minCellW = 110;
+    const W = Math.max(wrapRect.width, order.length * minCellW + 100);
+    const H = Math.max(wrapRect.height, 420);
+
+    const margin = { top: 20, right: 24, bottom: 46, left: 64 };
+    const plotW = W - margin.left - margin.right;
+    const plotH = H - margin.top - margin.bottom;
+
+    svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+    svg.removeAttribute('width');
+    svg.removeAttribute('height');
+
+    const allVals = order.flatMap(n => groupMap[n]);
+    const rawMin = Math.min(...allVals), rawMax = Math.max(...allVals);
+    const pad = (rawMax - rawMin) * 0.12 || 1;
+    const domain = [rawMin - pad, rawMax + pad];
+
+    const svgns = "http://www.w3.org/2000/svg";
+    const g = el('g', { transform: `translate(${margin.left},${margin.top})` });
+    svg.appendChild(g);
+
+    function yPos(v){ return plotH * (1 - (v - domain[0]) / (domain[1]-domain[0] || 1)); }
+
+    // y gridlines/ticks
+    niceLinearTicks(domain[0], domain[1], 6).forEach(t => {
+      const y = yPos(t);
+      g.appendChild(el('line', { class:'grid-line', x1:0, x2:plotW, y1:y, y2:y }));
+      const label = el('text', { class:'tick-text', x:-8, y:y+4, 'text-anchor':'end' });
+      label.textContent = fmt(t);
+      g.appendChild(label);
+    });
+
+    g.appendChild(el('line', { class:'axis-line', x1:0, x2:plotW, y1:plotH, y2:plotH }));
+    g.appendChild(el('line', { class:'axis-line', x1:0, x2:0, y1:0, y2:plotH }));
+
+    const n = order.length;
+    const slotW = plotW / n;
+    const gridN = 60;
+
+    order.forEach((name, i) => {
+      const values = groupMap[name];
+      const center = slotW * (i + 0.5);
+
+      const label = el('text', { class:'group-label', x:center, y:plotH + 24 });
+      label.textContent = name.length > 14 ? name.slice(0,13) + '…' : name;
+      g.appendChild(label);
+
+      if(values.length < 3){
+        // too few points for a meaningful density estimate: show raw points only
+        values.forEach(v => {
+          const jitter = (Math.random() - 0.5) * 10;
+          g.appendChild(el('circle', { class:'raw-point', cx:center+jitter, cy:yPos(v), r:2.6, opacity:0.85 }));
+        });
+        const note = el('text', { class:'tick-text', x:center, y: yPos(domain[1]) + 12, 'text-anchor':'middle' });
+        note.textContent = 'n<3';
+        g.appendChild(note);
+        return;
+      }
+
+      const kde = computeKDE(values, domain, parseFloat(opts.bandwidth), gridN);
+      const maxDensity = Math.max(...kde.density) || 1;
+      const scale = opts.maxWidth / maxDensity;
+
+      let pts = [];
+      for(let k=0;k<kde.grid.length;k++){
+        pts.push({ x: center + kde.density[k]*scale, y: yPos(kde.grid[k]) });
+      }
+      for(let k=kde.grid.length-1;k>=0;k--){
+        pts.push({ x: center - kde.density[k]*scale, y: yPos(kde.grid[k]) });
+      }
+      const d = 'M ' + pts.map(p => `${p.x.toFixed(2)},${p.y.toFixed(2)}`).join(' L ') + ' Z';
+      g.appendChild(el('path', { class:'violin', d }));
+
+      if(opts.showIqr){
+        g.appendChild(el('line', {
+          class:'iqr-line', x1:center, x2:center, y1:yPos(kde.q1), y2:yPos(kde.q3)
+        }));
+        g.appendChild(el('circle', { class:'median-dot', cx:center, cy:yPos(kde.median), r:4 }));
+      }
+
+      if(opts.showPoints){
+        values.forEach(v => {
+          const jitter = (Math.random() - 0.5) * (opts.maxWidth * 0.5);
+          g.appendChild(el('circle', { class:'raw-point', cx:center+jitter, cy:yPos(v), r:1.8, opacity:0.5 }));
+        });
+      }
+    });
+  }
+
+  function run(){
+    bandwidthVal.textContent = bandwidthEl.value;
+    maxWidthVal.textContent = maxWidthEl.value;
+
+    const parsed = parseGroups(dataInput.value);
+    showWarning('');
+
+    if(parsed.order.length === 0){
+      showWarning('数値データが見つかりません。入力形式を確認してください。');
+      emptyState.style.display = 'flex';
+      svg.style.display = 'none';
+      statsSection.style.display = 'none';
+      varList.innerHTML = '';
+      return;
+    }
+
+    renderVarList(parsed.order);
+
+    const activeOrder = parsed.order.filter(n => selectedGroups[n]);
+    if(activeOrder.length === 0){
+      showWarning('少なくとも1つのグループを選択してください。');
+      emptyState.style.display = 'flex';
+      svg.style.display = 'none';
+      statsSection.style.display = 'none';
+      return;
+    }
+
+    let msgs = [];
+    if(parsed.skipped > 0) msgs.push(`${parsed.skipped}行を読み込めずスキップしました（非数値の値）。`);
+    showWarning(msgs.join(' '));
+
+    const activeMap = {};
+    activeOrder.forEach(n => { activeMap[n] = parsed.groupMap[n]; });
+
+    renderChart(activeOrder, activeMap, {
+      bandwidth: bandwidthEl.value,
+      maxWidth: parseFloat(maxWidthEl.value),
+      showIqr: showIqrEl.checked,
+      showPoints: showPointsEl.checked
+    });
+
+    renderStats(activeOrder, activeMap);
+  }
+
+  function debounce(fn, delay){
+    let t;
+    return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), delay); };
+  }
+  const debouncedRun = debounce(run, 250);
+
+  dataInput.addEventListener('input', debouncedRun);
+  bandwidthEl.addEventListener('input', run);
+  maxWidthEl.addEventListener('input', run);
+  showIqrEl.addEventListener('change', run);
+  showPointsEl.addEventListener('change', run);
+  window.addEventListener('resize', debounce(run, 200));
+
+  run();
+})();
+</script>
+</body>
+</html>

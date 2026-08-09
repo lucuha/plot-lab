@@ -30,15 +30,16 @@
   header h1{margin:0; font-size:24px; font-weight:600;}
   header p{margin:10px 0 0; color:var(--ink-dim); font-size:12.5px; max-width:70ch;}
   main{
-    max-width:900px;
+    max-width:1200px;
     margin:0 auto;
     padding:40px 28px;
     display:grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: 1fr 1fr 1fr;
     gap:1px;
     background:var(--grid);
   }
-  @media (max-width:700px){ main{grid-template-columns:1fr;} }
+  @media (max-width:900px){ main{grid-template-columns:1fr 1fr;} }
+  @media (max-width:600px){ main{grid-template-columns:1fr;} }
   a.card{
     display:block;
     background:var(--panel);
@@ -85,7 +86,7 @@
 <header>
   <p class="kicker">Instrument Panel</p>
   <h1>データ可視化ツール集</h1>
-  <p>ブラウザだけで動く、単一HTMLファイルの分析ツールです。外部ライブラリ不要・サーバー不要でGitHub Pagesにそのまま置けます。</p>
+  <p>ブラウザだけで動く分析ツール集です。入力データはすべてブラウザ内で処理され、外部には送信されません。</p>
 </header>
 
 <main>
@@ -101,9 +102,15 @@
     <p>複数列の数値データから、全変数の組み合わせを総当たりで並べた散布図行列を作成。対角はヒストグラム。</p>
     <div class="go">開く →</div>
   </a>
+  <a class="card" href="violin.html">
+    <div class="num">03 / SHAPE</div>
+    <h2>バイオリンチャート</h2>
+    <p>グループごとの数値データからカーネル密度推定で分布形状を描画。複数グループの分布を並べて比較できる。</p>
+    <div class="go">開く →</div>
+  </a>
 </main>
 
-<footer>Static tools — no build step, no dependencies.</footer>
+<footer>plot-lab</footer>
 
 </body>
 </html>
