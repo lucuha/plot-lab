@@ -76,6 +76,13 @@
   .toggle-row{display:flex; gap:16px; flex-wrap:wrap; margin-bottom:4px;}
   .toggle{display:flex; align-items:center; gap:7px; font-size:12.5px; cursor:pointer; user-select:none;}
   .toggle input{accent-color:var(--accent);}
+  button{
+    font-family:var(--mono); font-size:12.5px; letter-spacing:0.04em; padding:10px 16px; margin-top:12px;
+    background:transparent; border:1px solid var(--grid-strong); color:var(--ink-dim);
+    cursor:pointer; text-transform:uppercase; transition:background 0.12s, color 0.12s;
+  }
+  button:hover{background:var(--panel-2); color:var(--ink);}
+  button:disabled{opacity:0.35; cursor:not-allowed; background:transparent; color:var(--ink-dim);}
   .readout{margin-top:20px; border-top:1px solid var(--grid); padding-top:16px;}
   .readout-grid{display:grid; grid-template-columns: 1fr 1fr; gap:10px 14px;}
   .stat{background:var(--panel-2); border:1px solid var(--grid); padding:8px 10px;}
@@ -87,7 +94,7 @@
     flex:1; background:var(--panel-2); border:1px solid var(--grid);
     min-height:420px; overflow:auto; position:relative;
   }
-  svg{display:block; width:100%; height:100%;}
+  svg{display:block; position:absolute; top:0; left:0;} /* out of flow: wrap size drives chart size, not vice versa */
   .violin{fill:var(--accent); fill-opacity:0.55; stroke:var(--accent); stroke-width:1.2;}
   .iqr-line{stroke:var(--accent-2); stroke-width:3; stroke-linecap:round;}
   .median-dot{fill:var(--bg); stroke:var(--accent-2); stroke-width:2;}
@@ -150,7 +157,7 @@ C, 19.9
 C, 18.4
 C, 17.9
 C, 20.3</textarea>
-    <p class="hint">各行「グループ名, 値」（カンマまたはタブ区切り）。グループ名を省略し数値のみでも入力可（単一グループとして扱う）。エクセルの2列コピペにも対応。</p>
+    <p class="hint">各行「グループ名, 値」（カンマ・タブ・スペース区切り）。グループ名を省略し数値のみでも入力可（単一グループとして扱う）。エクセルの2列コピペ、テキスト/CSVファイルのドロップにも対応。</p>
 
     <h2>使用するグループ</h2>
     <div class="varlist" id="varList"></div>
@@ -171,6 +178,7 @@ C, 20.3</textarea>
         <label class="toggle"><input type="checkbox" id="showIqr" checked> 中央値・四分位範囲を表示</label>
         <label class="toggle"><input type="checkbox" id="showPoints"> 生データ点を重ねて表示</label>
       </div>
+      <div class="btn-row"><button id="svgBtn" disabled>SVG保存</button></div>
     </div>
 
     <div class="readout" id="statsSection" style="display:none;">
@@ -195,27 +203,35 @@ C, 20.3</textarea>
 (function(){
   "use strict";
 
-  const dataInput    = document.getElementById('dataInput');
-  const varList      = document.getElementById('varList');
-  const warningBox   = document.getElementById('warningBox');
-  const bandwidthEl  = document.getElementById('bandwidth');
-  const bandwidthVal = document.getElementById('bandwidthVal');
-  const maxWidthEl   = document.getElementById('maxWidth');
-  const maxWidthVal  = document.getElementById('maxWidthVal');
-  const showIqrEl    = document.getElementById('showIqr');
-  const showPointsEl = document.getElementById('showPoints');
-  const emptyState   = document.getElementById('emptyState');
-  const svg          = document.getElementById('chart');
-  const chartWrap    = document.getElementById('chartWrap');
-  const statsSection = document.getElementById('statsSection');
-  const statsGrid    = document.getElementById('statsGrid');
+  const $ = id => document.getElementById(id);
+  const dataInput    = $('dataInput');
+  const varList      = $('varList');
+  const warningBox   = $('warningBox');
+  const bandwidthEl  = $('bandwidth');
+  const bandwidthVal = $('bandwidthVal');
+  const maxWidthEl   = $('maxWidth');
+  const maxWidthVal  = $('maxWidthVal');
+  const showIqrEl    = $('showIqr');
+  const showPointsEl = $('showPoints');
+  const svgBtn       = $('svgBtn');
+  const emptyState   = $('emptyState');
+  const svg          = $('chart');
+  const chartWrap    = $('chartWrap');
+  const statsSection = $('statsSection');
+  const statsGrid    = $('statsGrid');
 
-  let selectedGroups = null;
+  const SVGNS = "http://www.w3.org/2000/svg";
+  let selKey = null, selected = {};
+  let cacheText = null, cacheParsed = null;
 
   function showWarning(msg){
     if(!msg){ warningBox.classList.remove('show'); warningBox.textContent=''; return; }
     warningBox.textContent = msg;
     warningBox.classList.add('show');
+  }
+
+  function esc(s){
+    return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   }
 
   function fmt(num){
@@ -225,107 +241,131 @@ C, 20.3</textarea>
     return (Math.round(num * 1000) / 1000).toString();
   }
 
-  function mean(arr){ return arr.reduce((a,b)=>a+b,0) / arr.length; }
-  function stddev(arr, m){
-    const v = arr.reduce((a,b)=>a + (b-m)*(b-m), 0) / (arr.length - 1 || 1);
-    return Math.sqrt(v);
-  }
   function quantile(sorted, q){
     const pos = (sorted.length - 1) * q;
     const base = Math.floor(pos);
     const rest = pos - base;
-    if(sorted[base+1] !== undefined) return sorted[base] + rest * (sorted[base+1] - sorted[base]);
+    if(base + 1 < sorted.length) return sorted[base] + rest * (sorted[base+1] - sorted[base]);
     return sorted[base];
+  }
+
+  // "label, value" / "label<TAB>value" / "label value" / "value"
+  function parseLine(line){
+    let parts = line.split(/[,\t;]/).map(t => t.trim()).filter(t => t.length > 0);
+    if(parts.length === 1) parts = parts[0].split(/\s+/);
+    let label = null, valueStr;
+    if(parts.length >= 2){
+      valueStr = parts[parts.length - 1];
+      label = parts.slice(0, -1).join(' ');
+    } else {
+      valueStr = parts[0];
+    }
+    const value = valueStr === '' ? NaN : Number(valueStr);
+    return { label, value, valid: Number.isFinite(value) };
   }
 
   function parseGroups(text){
     const lines = text.split(/\r?\n/).filter(l => l.trim().length > 0);
-    if(lines.length === 0) return { order: [], groupMap: {}, skipped: 0 };
+    if(lines.length === 0) return { order: [], groupMap: new Map(), skipped: 0 };
 
-    const tryParseLine = (line) => {
-      const parts = line.split(/[,\t]/);
-      let label, valueStr;
-      if(parts.length >= 2){
-        label = parts[0].trim();
-        valueStr = parts.slice(1).join(',').trim();
-      } else {
-        label = null;
-        valueStr = parts[0].trim();
-      }
-      const value = parseFloat(valueStr);
-      return { label, value, valid: Number.isFinite(value) };
-    };
-
-    const first = tryParseLine(lines[0]);
-    const dataLines = first.valid ? lines : lines.slice(1);
+    const first = parseLine(lines[0]);
+    const dataLines = first.valid ? lines : lines.slice(1); // first non-numeric line = header
 
     const order = [];
-    const groupMap = {};
+    const raw = new Map();
     let skipped = 0;
 
-    dataLines.forEach(line => {
-      const r = tryParseLine(line);
-      if(!r.valid){ skipped++; return; }
-      const label = (r.label && r.label.length > 0) ? r.label : 'data';
-      if(!(label in groupMap)){ groupMap[label] = []; order.push(label); }
-      groupMap[label].push(r.value);
-    });
+    for(const line of dataLines){
+      const r = parseLine(line);
+      if(!r.valid){ skipped++; continue; }
+      const label = r.label || 'data';
+      let arr = raw.get(label);
+      if(!arr){ arr = []; raw.set(label, arr); order.push(label); }
+      arr.push(r.value);
+    }
 
+    // pre-compute sorted values + summary per group once per text change
+    const groupMap = new Map();
+    for(const [label, arr] of raw){
+      const sorted = Float64Array.from(arr).sort();
+      const n = sorted.length;
+      let sum = 0;
+      for(let k=0;k<n;k++) sum += sorted[k];
+      const mean = sum / n;
+      let ss = 0;
+      for(let k=0;k<n;k++){ const d = sorted[k] - mean; ss += d*d; }
+      groupMap.set(label, {
+        values: arr, sorted, n, mean, sd: Math.sqrt(ss / (n - 1 || 1)),
+        q1: quantile(sorted, 0.25), median: quantile(sorted, 0.5), q3: quantile(sorted, 0.75)
+      });
+    }
     return { order, groupMap, skipped };
   }
 
+  function getParsed(){
+    const text = dataInput.value;
+    if(text !== cacheText){ cacheText = text; cacheParsed = parseGroups(text); }
+    return cacheParsed;
+  }
+
   function renderVarList(order){
-    const key = order.join('|');
-    if(!selectedGroups || selectedGroups.__key !== key){
-      selectedGroups = { __key: key };
-      order.forEach(n => { selectedGroups[n] = true; });
-    }
-    varList.innerHTML = order.map(n =>
-      `<label><input type="checkbox" data-var="${n}" ${selectedGroups[n] ? 'checked' : ''}><span class="swatch"></span>${n}</label>`
+    const key = order.join('\u0000');
+    if(key === selKey) return;
+    selKey = key;
+    selected = {};
+    order.forEach((_, i) => { selected[i] = true; });
+    varList.innerHTML = order.map((n, i) =>
+      `<label><input type="checkbox" data-idx="${i}" checked><span class="swatch"></span>${esc(n)}</label>`
     ).join('');
-    varList.querySelectorAll('input[type="checkbox"]').forEach(cb => {
-      cb.addEventListener('change', () => {
-        selectedGroups[cb.dataset.var] = cb.checked;
-        run();
-      });
-    });
   }
+  varList.addEventListener('change', e => {
+    const idx = e.target.dataset && e.target.dataset.idx;
+    if(idx === undefined) return;
+    selected[idx] = e.target.checked;
+    run();
+  });
 
-  function gaussianKernel(u){
-    return Math.exp(-0.5 * u * u) / Math.sqrt(2 * Math.PI);
-  }
-
-  function silvermanBandwidth(values, sorted, sd, factor){
-    const n = values.length;
-    const q1 = quantile(sorted, 0.25), q3 = quantile(sorted, 0.75);
-    const iqr = q3 - q1;
-    let robust = Math.min(sd, iqr / 1.34);
-    if(!Number.isFinite(robust) || robust <= 0) robust = sd || 1;
-    let h = 0.9 * robust * Math.pow(n, -0.2);
-    if(!Number.isFinite(h) || h <= 0) h = (sorted[sorted.length-1] - sorted[0]) * 0.05 || 1;
+  function silvermanBandwidth(g, factor){
+    const iqr = g.q3 - g.q1;
+    let robust = Math.min(g.sd, iqr / 1.34);
+    if(!Number.isFinite(robust) || robust <= 0) robust = g.sd;
+    let h = 0.9 * robust * Math.pow(g.n, -0.2);
+    if(!Number.isFinite(h) || h <= 0) h = (g.sorted[g.n-1] - g.sorted[0]) * 0.05 || 1;
     return h * factor;
   }
 
-  function computeKDE(values, domain, bandwidthFactor, gridN){
-    const sorted = [...values].sort((a,b)=>a-b);
-    const m = mean(values);
-    const sd = stddev(values, m);
-    const h = silvermanBandwidth(values, sorted, sd, bandwidthFactor);
-    const [lo, hi] = domain;
-    const grid = [];
-    const density = [];
+  // Gaussian KDE evaluated on [min-3h, max+3h] (clipped to the axis domain).
+  // Only samples within 4h of each grid point contribute (sorted window), so cost ~O(gridN * local n).
+  function computeKDE(g, domain, bandwidthFactor, gridN){
+    const h = silvermanBandwidth(g, bandwidthFactor);
+    const s = g.sorted, n = g.n;
+    const lo = Math.max(domain[0], s[0] - 3*h);
+    const hi = Math.min(domain[1], s[n-1] + 3*h);
+    const grid = new Float64Array(gridN + 1);
+    const density = new Float64Array(gridN + 1);
+    const norm = 1 / (n * h * Math.sqrt(2 * Math.PI));
+    const cut = 4 * h;
+    let a = 0, b = 0;
     for(let i=0;i<=gridN;i++){
       const x = lo + (hi - lo) * (i / gridN);
+      while(a < n && s[a] < x - cut) a++;
+      while(b < n && s[b] <= x + cut) b++;
       let sum = 0;
-      for(const v of values){ sum += gaussianKernel((x - v) / h); }
-      grid.push(x);
-      density.push(sum / (values.length * h));
+      for(let k=a;k<b;k++){ const u = (x - s[k]) / h; sum += Math.exp(-0.5 * u * u); }
+      grid[i] = x;
+      density[i] = sum * norm;
     }
-    return { grid, density, median: quantile(sorted,0.5), q1: quantile(sorted,0.25), q3: quantile(sorted,0.75), mean: m, sd, n: values.length };
+    return { grid, density };
+  }
+
+  // deterministic jitter in [-0.5, 0.5) so points stay put while sliders move
+  function jitter(k){
+    const x = Math.sin(k * 12.9898 + 78.233) * 43758.5453;
+    return x - Math.floor(x) - 0.5;
   }
 
   function el(tag, attrs){
-    const e = document.createElementNS("http://www.w3.org/2000/svg", tag);
+    const e = document.createElementNS(SVGNS, tag);
     for(const k in attrs) e.setAttribute(k, attrs[k]);
     return e;
   }
@@ -340,173 +380,225 @@ C, 20.3</textarea>
     else if(norm < 3) step = 2*mag;
     else if(norm < 7) step = 5*mag;
     else step = 10*mag;
-    const start = Math.ceil(minVal / step) * step;
+    const start = Math.ceil(minVal / step);
     const ticks = [];
-    for(let t=start; t<=maxVal + step*0.001; t+=step){ ticks.push(t); }
+    for(let i=start; i*step<=maxVal + step*0.001; i++){ ticks.push(i * step); }
     return ticks;
   }
 
   function renderStats(order, groupMap){
     statsSection.style.display = 'block';
-    const rows = order.map(name => {
-      const vals = groupMap[name];
-      const sorted = [...vals].sort((a,b)=>a-b);
-      return `<div class="stat"><div class="k">${name} (n=${vals.length})</div><div class="v">中央値 ${fmt(quantile(sorted,0.5))}</div></div>`;
-    });
-    statsGrid.innerHTML = rows.join('');
+    statsGrid.innerHTML = order.map(name => {
+      const g = groupMap.get(name);
+      return `<div class="stat"><div class="k">${esc(name)} (n=${g.n})</div>` +
+        `<div class="v">中央値 ${fmt(g.median)}</div>` +
+        `<div class="k" style="margin-top:3px;">平均 ${fmt(g.mean)} / IQR ${fmt(g.q3 - g.q1)}</div></div>`;
+    }).join('');
   }
 
   function renderChart(order, groupMap, opts){
     emptyState.style.display = 'none';
     svg.style.display = 'block';
-    svg.innerHTML = '';
+    svg.textContent = '';
 
-    const wrapRect = chartWrap.getBoundingClientRect();
     const minCellW = 110;
-    const W = Math.max(wrapRect.width, order.length * minCellW + 100);
-    const H = Math.max(wrapRect.height, 420);
+    const W = Math.max(chartWrap.clientWidth, order.length * minCellW + 100, 300);
+    const H = Math.max(chartWrap.clientHeight, 420);
 
     const margin = { top: 20, right: 24, bottom: 46, left: 64 };
     const plotW = W - margin.left - margin.right;
     const plotH = H - margin.top - margin.bottom;
 
     svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
-    svg.removeAttribute('width');
-    svg.removeAttribute('height');
+    svg.setAttribute('width', W);
+    svg.setAttribute('height', H);
 
-    const allVals = order.flatMap(n => groupMap[n]);
-    const rawMin = Math.min(...allVals), rawMax = Math.max(...allVals);
+    let rawMin = Infinity, rawMax = -Infinity;
+    for(const name of order){
+      const g = groupMap.get(name);
+      if(g.sorted[0] < rawMin) rawMin = g.sorted[0];
+      if(g.sorted[g.n-1] > rawMax) rawMax = g.sorted[g.n-1];
+    }
     const pad = (rawMax - rawMin) * 0.12 || 1;
     const domain = [rawMin - pad, rawMax + pad];
 
-    const svgns = "http://www.w3.org/2000/svg";
-    const g = el('g', { transform: `translate(${margin.left},${margin.top})` });
-    svg.appendChild(g);
+    const frag = document.createDocumentFragment();
+    const root = el('g', { transform: `translate(${margin.left},${margin.top})` });
+    frag.appendChild(root);
 
-    function yPos(v){ return plotH * (1 - (v - domain[0]) / (domain[1]-domain[0] || 1)); }
+    const yScale = plotH / (domain[1] - domain[0]);
+    const yPos = v => plotH - (v - domain[0]) * yScale;
 
-    // y gridlines/ticks
     niceLinearTicks(domain[0], domain[1], 6).forEach(t => {
       const y = yPos(t);
-      g.appendChild(el('line', { class:'grid-line', x1:0, x2:plotW, y1:y, y2:y }));
+      root.appendChild(el('line', { class:'grid-line', x1:0, x2:plotW, y1:y, y2:y }));
       const label = el('text', { class:'tick-text', x:-8, y:y+4, 'text-anchor':'end' });
       label.textContent = fmt(t);
-      g.appendChild(label);
+      root.appendChild(label);
     });
 
-    g.appendChild(el('line', { class:'axis-line', x1:0, x2:plotW, y1:plotH, y2:plotH }));
-    g.appendChild(el('line', { class:'axis-line', x1:0, x2:0, y1:0, y2:plotH }));
+    root.appendChild(el('line', { class:'axis-line', x1:0, x2:plotW, y1:plotH, y2:plotH }));
+    root.appendChild(el('line', { class:'axis-line', x1:0, x2:0, y1:0, y2:plotH }));
 
-    const n = order.length;
-    const slotW = plotW / n;
-    const gridN = 60;
+    const slotW = plotW / order.length;
+    const halfW = Math.min(opts.maxWidth, slotW * 0.45); // never overlap neighbours
+    const gridN = 80;
 
     order.forEach((name, i) => {
-      const values = groupMap[name];
+      const g = groupMap.get(name);
+      const values = g.values;
       const center = slotW * (i + 0.5);
 
       const label = el('text', { class:'group-label', x:center, y:plotH + 24 });
       label.textContent = name.length > 14 ? name.slice(0,13) + '…' : name;
-      g.appendChild(label);
+      root.appendChild(label);
 
-      if(values.length < 3){
+      if(g.n < 3){
         // too few points for a meaningful density estimate: show raw points only
-        values.forEach(v => {
-          const jitter = (Math.random() - 0.5) * 10;
-          g.appendChild(el('circle', { class:'raw-point', cx:center+jitter, cy:yPos(v), r:2.6, opacity:0.85 }));
+        values.forEach((v, k) => {
+          root.appendChild(el('circle', { class:'raw-point', cx:center + jitter(k) * 10, cy:yPos(v), r:2.6, opacity:0.85 }));
         });
-        const note = el('text', { class:'tick-text', x:center, y: yPos(domain[1]) + 12, 'text-anchor':'middle' });
+        const note = el('text', { class:'tick-text', x:center, y:12, 'text-anchor':'middle' });
         note.textContent = 'n<3';
-        g.appendChild(note);
+        root.appendChild(note);
         return;
       }
 
-      const kde = computeKDE(values, domain, parseFloat(opts.bandwidth), gridN);
-      const maxDensity = Math.max(...kde.density) || 1;
-      const scale = opts.maxWidth / maxDensity;
+      const kde = computeKDE(g, domain, opts.bandwidth, gridN);
+      let maxDensity = 0;
+      for(const d of kde.density) if(d > maxDensity) maxDensity = d;
+      const scale = halfW / (maxDensity || 1);
 
-      let pts = [];
+      const right = [], left = [];
       for(let k=0;k<kde.grid.length;k++){
-        pts.push({ x: center + kde.density[k]*scale, y: yPos(kde.grid[k]) });
+        const y = yPos(kde.grid[k]).toFixed(2);
+        const dx = kde.density[k] * scale;
+        right.push(`${(center + dx).toFixed(2)},${y}`);
+        left.push(`${(center - dx).toFixed(2)},${y}`);
       }
-      for(let k=kde.grid.length-1;k>=0;k--){
-        pts.push({ x: center - kde.density[k]*scale, y: yPos(kde.grid[k]) });
-      }
-      const d = 'M ' + pts.map(p => `${p.x.toFixed(2)},${p.y.toFixed(2)}`).join(' L ') + ' Z';
-      g.appendChild(el('path', { class:'violin', d }));
-
-      if(opts.showIqr){
-        g.appendChild(el('line', {
-          class:'iqr-line', x1:center, x2:center, y1:yPos(kde.q1), y2:yPos(kde.q3)
-        }));
-        g.appendChild(el('circle', { class:'median-dot', cx:center, cy:yPos(kde.median), r:4 }));
-      }
+      const d = 'M' + right.join('L') + 'L' + left.reverse().join('L') + 'Z';
+      root.appendChild(el('path', { class:'violin', d }));
 
       if(opts.showPoints){
-        values.forEach(v => {
-          const jitter = (Math.random() - 0.5) * (opts.maxWidth * 0.5);
-          g.appendChild(el('circle', { class:'raw-point', cx:center+jitter, cy:yPos(v), r:1.8, opacity:0.5 }));
+        // one path of tiny circles per group: far fewer DOM nodes than <circle> per point
+        const rr = 1.8;
+        let pd = '';
+        values.forEach((v, k) => {
+          const x = center + jitter(k) * halfW;
+          pd += `M${(x - rr).toFixed(1)},${yPos(v).toFixed(1)}a${rr},${rr} 0 1,0 ${2*rr},0a${rr},${rr} 0 1,0 ${-2*rr},0`;
         });
+        root.appendChild(el('path', { class:'raw-point', d:pd, opacity:0.5 }));
+      }
+
+      if(opts.showIqr){
+        root.appendChild(el('line', { class:'iqr-line', x1:center, x2:center, y1:yPos(g.q1), y2:yPos(g.q3) }));
+        root.appendChild(el('circle', { class:'median-dot', cx:center, cy:yPos(g.median), r:4 }));
       }
     });
+
+    svg.appendChild(frag);
+  }
+
+  function hideChart(){
+    emptyState.style.display = 'flex';
+    svg.style.display = 'none';
+    statsSection.style.display = 'none';
+    svgBtn.disabled = true;
   }
 
   function run(){
     bandwidthVal.textContent = bandwidthEl.value;
     maxWidthVal.textContent = maxWidthEl.value;
 
-    const parsed = parseGroups(dataInput.value);
+    const parsed = getParsed();
     showWarning('');
 
     if(parsed.order.length === 0){
       showWarning('数値データが見つかりません。入力形式を確認してください。');
-      emptyState.style.display = 'flex';
-      svg.style.display = 'none';
-      statsSection.style.display = 'none';
+      hideChart();
       varList.innerHTML = '';
+      selKey = null;
       return;
     }
 
     renderVarList(parsed.order);
 
-    const activeOrder = parsed.order.filter(n => selectedGroups[n]);
+    const activeOrder = parsed.order.filter((_, i) => selected[i]);
     if(activeOrder.length === 0){
       showWarning('少なくとも1つのグループを選択してください。');
-      emptyState.style.display = 'flex';
-      svg.style.display = 'none';
-      statsSection.style.display = 'none';
+      hideChart();
       return;
     }
 
-    let msgs = [];
-    if(parsed.skipped > 0) msgs.push(`${parsed.skipped}行を読み込めずスキップしました（非数値の値）。`);
-    showWarning(msgs.join(' '));
+    if(parsed.skipped > 0) showWarning(`${parsed.skipped}行を読み込めずスキップしました（非数値の値）。`);
 
-    const activeMap = {};
-    activeOrder.forEach(n => { activeMap[n] = parsed.groupMap[n]; });
-
-    renderChart(activeOrder, activeMap, {
-      bandwidth: bandwidthEl.value,
+    renderChart(activeOrder, parsed.groupMap, {
+      bandwidth: parseFloat(bandwidthEl.value),
       maxWidth: parseFloat(maxWidthEl.value),
       showIqr: showIqrEl.checked,
       showPoints: showPointsEl.checked
     });
+    svgBtn.disabled = false;
 
-    renderStats(activeOrder, activeMap);
+    renderStats(activeOrder, parsed.groupMap);
+  }
+
+  let rafId = 0;
+  function scheduleRun(){
+    if(rafId) return;
+    rafId = requestAnimationFrame(() => { rafId = 0; run(); });
   }
 
   function debounce(fn, delay){
     let t;
     return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), delay); };
   }
-  const debouncedRun = debounce(run, 250);
 
-  dataInput.addEventListener('input', debouncedRun);
-  bandwidthEl.addEventListener('input', run);
-  maxWidthEl.addEventListener('input', run);
+  function download(blob, name){
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+  }
+
+  svgBtn.addEventListener('click', () => {
+    const css = getComputedStyle(document.documentElement);
+    const v = name => css.getPropertyValue(name).trim();
+    const clone = svg.cloneNode(true);
+    clone.removeAttribute('style');
+    clone.setAttribute('xmlns', SVGNS);
+    const style = document.createElementNS(SVGNS, 'style');
+    style.textContent =
+      `.violin{fill:${v('--accent')};fill-opacity:.55;stroke:${v('--accent')};stroke-width:1.2}` +
+      `.iqr-line{stroke:${v('--accent-2')};stroke-width:3;stroke-linecap:round}` +
+      `.median-dot{fill:${v('--bg')};stroke:${v('--accent-2')};stroke-width:2}.raw-point{fill:${v('--ink')}}` +
+      `.axis-line{stroke:${v('--grid-strong')}}.grid-line{stroke:${v('--grid')}}` +
+      `text{font-family:${v('--mono')};fill:${v('--ink-dim')}}.tick-text{font-size:10.5px}.group-label{font-size:11px;text-anchor:middle}`;
+    clone.insertBefore(style, clone.firstChild);
+    const bg = document.createElementNS(SVGNS, 'rect');
+    bg.setAttribute('width', '100%'); bg.setAttribute('height', '100%'); bg.setAttribute('fill', v('--panel-2'));
+    clone.insertBefore(bg, style.nextSibling);
+    download(new Blob([new XMLSerializer().serializeToString(clone)], { type: 'image/svg+xml' }), 'violin.svg');
+  });
+
+  dataInput.addEventListener('input', debounce(run, 250));
+  bandwidthEl.addEventListener('input', scheduleRun);
+  maxWidthEl.addEventListener('input', scheduleRun);
   showIqrEl.addEventListener('change', run);
   showPointsEl.addEventListener('change', run);
   window.addEventListener('resize', debounce(run, 200));
+
+  dataInput.addEventListener('dragover', e => e.preventDefault());
+  dataInput.addEventListener('drop', e => {
+    const f = e.dataTransfer && e.dataTransfer.files[0];
+    if(!f) return;
+    e.preventDefault();
+    f.text().then(t => { dataInput.value = t; run(); });
+  });
 
   run();
 })();
